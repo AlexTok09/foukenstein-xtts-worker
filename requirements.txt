@@ -1,4 +1,6 @@
 TTS==0.22.0
+transformers==4.37.2
+tokenizers==0.15.2
 runpod>=1.6.0
 soundfile>=0.12.1
 numpy<2.0
