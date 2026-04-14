@@ -1,0 +1,4 @@
+TTS==0.22.0
+runpod>=1.6.0
+soundfile>=0.12.1
+numpy<2.0
