@@ -63,13 +63,25 @@ DEFAULT_LANG = os.environ.get("LANG", "fr").strip() or "fr"
 SR = int(os.environ.get("SR", "24000"))
 XTTS_HARD_LIMIT = 250  # limite dure XTTS pour le français (273), marge de sécurité
 
-# Stitching params — valeurs figées de start_tts_frozen.sh
-XFADE_MS        = int(os.environ.get("XFADE_MS", "320"))
-EDGE_FADE_MS    = int(os.environ.get("EDGE_FADE_MS", "80"))
-PAUSE_MS        = int(os.environ.get("PAUSE_MS", "160"))
-MICRO_PAUSE_MS  = int(os.environ.get("MICRO_PAUSE_MS", "40"))
+# ── Stitching params ─────────────────────────────────────────────────────────
+# Ancien comportement problématique :
+#   EDGE_FADE_MS=80 appliquait un fade-in ET fade-out de 80 ms à chaque chunk.
+#   XFADE_MS=320 faisait entrer le chunk suivant progressivement sur 320 ms.
+#
+# Nouveau comportement :
+#   - silence initial pour protéger le tout premier mot côté player/navigateur
+#   - pas de fade-in sur les chunks, pour préserver les consonnes d'attaque
+#   - petit fade-out de fin de chunk pour éviter les clics
+#   - pas de crossfade long entre chunks
+LEADING_SILENCE_MS = int(os.environ.get("LEADING_SILENCE_MS", "120"))
+CHUNK_FADE_IN_MS   = int(os.environ.get("CHUNK_FADE_IN_MS", "0"))
+CHUNK_FADE_OUT_MS  = int(os.environ.get("CHUNK_FADE_OUT_MS", "12"))
+
+XFADE_MS        = int(os.environ.get("XFADE_MS", "0"))
+PAUSE_MS        = int(os.environ.get("PAUSE_MS", "220"))
+MICRO_PAUSE_MS  = int(os.environ.get("MICRO_PAUSE_MS", "0"))
 TAIL_SILENCE_MS = int(os.environ.get("TAIL_SILENCE_MS", "700"))
-FADE_OUT_MS     = int(os.environ.get("FADE_OUT_MS", "80"))
+FADE_OUT_MS     = int(os.environ.get("FADE_OUT_MS", "40"))
 
 
 # ── Split helpers (verbatim xtts_http_server.py) ─────────────────────────────
@@ -117,13 +129,18 @@ def _subsplit(text: str, limit: int = XTTS_HARD_LIMIT) -> list:
     return final or [text[:limit]]
 
 
-# ── Audio helpers (verbatim) ─────────────────────────────────────────────────
+# ── Audio helpers ────────────────────────────────────────────────────────────
 def add_silence(ms: int) -> torch.Tensor:
     n = max(0, int(SR * ms / 1000))
     return torch.zeros((1, n), dtype=torch.float32)
 
 
 def edge_fade(wav: torch.Tensor, ms: int) -> torch.Tensor:
+    """
+    Ancienne fonction conservée pour compatibilité éventuelle/debug.
+    Elle n'est plus utilisée dans le flux principal, car elle applique
+    un fade-in et un fade-out symétriques.
+    """
     if ms <= 0:
         return wav
     n = int(SR * ms / 1000)
@@ -137,6 +154,50 @@ def edge_fade(wav: torch.Tensor, ms: int) -> torch.Tensor:
     mask[:, :n] *= win_in
     mask[:, -n:] *= win_out
     return wav * mask
+
+
+def chunk_fade(wav: torch.Tensor, fade_in_ms: int, fade_out_ms: int) -> torch.Tensor:
+    """
+    Nouveau fade séparé :
+    - fade_in_ms protège ou atténue le début du chunk
+    - fade_out_ms lisse uniquement la fin du chunk
+
+    Pour préserver les attaques de phrases, utiliser typiquement :
+        CHUNK_FADE_IN_MS=0
+        CHUNK_FADE_OUT_MS=12
+    """
+    if fade_in_ms <= 0 and fade_out_ms <= 0:
+        return wav
+
+    wav = wav.clone()
+
+    if fade_in_ms > 0:
+        n_in = int(SR * fade_in_ms / 1000)
+        n_in = min(max(n_in, 0), wav.shape[1])
+        if n_in > 0:
+            win_in = torch.linspace(
+                0.0,
+                1.0,
+                steps=n_in,
+                device=wav.device,
+                dtype=wav.dtype,
+            ).unsqueeze(0)
+            wav[:, :n_in] *= win_in
+
+    if fade_out_ms > 0:
+        n_out = int(SR * fade_out_ms / 1000)
+        n_out = min(max(n_out, 0), wav.shape[1])
+        if n_out > 0:
+            win_out = torch.linspace(
+                1.0,
+                0.0,
+                steps=n_out,
+                device=wav.device,
+                dtype=wav.dtype,
+            ).unsqueeze(0)
+            wav[:, -n_out:] *= win_out
+
+    return wav
 
 
 def equal_power_crossfade(a: torch.Tensor, b: torch.Tensor, fade_samples: int) -> torch.Tensor:
@@ -154,6 +215,12 @@ def equal_power_crossfade(a: torch.Tensor, b: torch.Tensor, fade_samples: int) -
     wb = torch.sin(t * 0.5 * torch.pi)
     mixed = a2 * wa + b1 * wb
     return torch.cat([a1, mixed, b2], dim=1)
+
+
+def add_leading_silence(wav: torch.Tensor, ms: int) -> torch.Tensor:
+    if ms <= 0:
+        return wav
+    return torch.cat([add_silence(ms).to(wav.device, wav.dtype), wav], dim=1)
 
 
 def add_tail_silence(wav: torch.Tensor, ms: int) -> torch.Tensor:
@@ -208,7 +275,13 @@ FADE_SAMPLES = int(SR * XFADE_MS / 1000)
 
 print(
     f"[handler] model ready in {time.time()-_t0:.1f}s "
-    f"(device={'cuda' if torch.cuda.is_available() else 'cpu'}, sr={SR})",
+    f"(device={'cuda' if torch.cuda.is_available() else 'cpu'}, sr={SR}, "
+    f"leading_silence_ms={LEADING_SILENCE_MS}, "
+    f"chunk_fade_in_ms={CHUNK_FADE_IN_MS}, "
+    f"chunk_fade_out_ms={CHUNK_FADE_OUT_MS}, "
+    f"xfade_ms={XFADE_MS}, pause_ms={PAUSE_MS}, "
+    f"micro_pause_ms={MICRO_PAUSE_MS}, tail_silence_ms={TAIL_SILENCE_MS}, "
+    f"fade_out_ms={FADE_OUT_MS})",
     flush=True,
 )
 
@@ -247,7 +320,13 @@ def _synthesize(chunks: list[str], language: str) -> tuple[torch.Tensor, int]:
             if wav.ndim == 1:
                 wav = wav.unsqueeze(0)
 
-        wav = edge_fade(wav, EDGE_FADE_MS)
+        # Ancien :
+        #   wav = edge_fade(wav, EDGE_FADE_MS)
+        #
+        # Nouveau :
+        #   on ne fade pas le début du chunk, pour ne pas manger les attaques.
+        #   on fade légèrement la fin pour éviter les clics.
+        wav = chunk_fade(wav, CHUNK_FADE_IN_MS, CHUNK_FADE_OUT_MS)
         pieces.append(("audio", wav))
 
         if MICRO_PAUSE_MS > 0:
@@ -267,6 +346,7 @@ def _synthesize(chunks: list[str], language: str) -> tuple[torch.Tensor, int]:
         else:
             final = equal_power_crossfade(final, w, FADE_SAMPLES)
 
+    final = add_leading_silence(final, LEADING_SILENCE_MS)
     final = add_tail_silence(final, TAIL_SILENCE_MS)
     final = fade_out(final, FADE_OUT_MS)
 
