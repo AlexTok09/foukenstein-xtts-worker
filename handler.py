@@ -88,7 +88,7 @@ PRE_CHUNK_SILENCE_MS = int(os.environ.get("PRE_CHUNK_SILENCE_MS", "70"))
 # Comme le fade-in tombe maintenant dans le pré-silence, on peut se permettre
 # un fade-in un peu plus long sans manger l'attaque du mot.
 CHUNK_FADE_IN_MS   = int(os.environ.get("CHUNK_FADE_IN_MS", "20"))
-CHUNK_FADE_OUT_MS  = int(os.environ.get("CHUNK_FADE_OUT_MS", "18"))
+CHUNK_FADE_OUT_MS  = int(os.environ.get("CHUNK_FADE_OUT_MS", "40"))
 
 XFADE_MS        = int(os.environ.get("XFADE_MS", "0"))
 PAUSE_MS        = int(os.environ.get("PAUSE_MS", "80"))
