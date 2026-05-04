@@ -91,7 +91,7 @@ CHUNK_FADE_IN_MS   = int(os.environ.get("CHUNK_FADE_IN_MS", "20"))
 CHUNK_FADE_OUT_MS  = int(os.environ.get("CHUNK_FADE_OUT_MS", "18"))
 
 XFADE_MS        = int(os.environ.get("XFADE_MS", "0"))
-PAUSE_MS        = int(os.environ.get("PAUSE_MS", "150"))
+PAUSE_MS        = int(os.environ.get("PAUSE_MS", "80"))
 MICRO_PAUSE_MS  = int(os.environ.get("MICRO_PAUSE_MS", "0"))
 TAIL_SILENCE_MS = int(os.environ.get("TAIL_SILENCE_MS", "700"))
 FADE_OUT_MS     = int(os.environ.get("FADE_OUT_MS", "40"))
